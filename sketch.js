@@ -383,7 +383,7 @@ function loadSelectedSong() {
     fft.setInput(song);
 
     // Mimic "kick" band ~ 20-150 Hz, threshold ~0.15..0.2; play with framesPerPeak ~ 20 (like sensitivity)
-    peakKick = new p5.PeakDetect(20, 150, 0.15, 20);
+    peakKick = new p5.PeakDetect(20, 150, 0.08, 10);
 
     song.play(); // start from beginning
   }, (err) => {
