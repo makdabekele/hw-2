@@ -1,147 +1,151 @@
-// ============================================
-// Beat Catcher — p5.js port (1:1 logic)
-// - Keeps menu/play/gameOver states
-// - Uses p5.FFT + p5.PeakDetect to mimic Minim BeatDetect.isKick()
-// - Preserves pending spawn delay + cooldowns + spotlight behavior
-// ============================================
+// ===== Beat Catcher — p5.js (fixed state cleanup) =====
+// Requires: p5.js + p5.sound
 
-// ---------- Config / Assets ----------
-const ASSET_PATH = ""; // e.g., "assets/" if you keep media in /assets
+// ---------- AUDIO ----------
+let menuMusic, gameOverMusic;
+let gameSongs = [];  // preloaded gameplay songs
+let song = null;     // current gameplay song
+let fft = null;      // p5.FFT
+let peak = null;     // p5.PeakDetect (kick-ish band)
+let prevOnset = false;
+let haveInteracted = false; // browsers require user gesture for audio
 
-let songFiles = [
+// ---------- SONGS ----------
+const songFiles = [
   "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
   "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
   "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
 ];
-let songTitles = [
+const songTitles = [
   "Stars Align",
   "California Roll",
-  "2000 Excurcsion"
+  "2000 Excursion"
 ];
+let selected = 0;
 
-const MENU_MUSIC = "Ariana Grande - no tears left to cry (Official Instrumental)-[AudioTrimmer.com].mp3";
-const GAMEOVER_MUSIC = "Hunter x Hunter 2011 OST 3 - 1 - Kingdom of Predators-[AudioTrimmer.com].mp3";
-const BG_IMG = "BG_main.png";
-const GAMEOVER_IMG = "game_over.png";
+// ---------- IMAGES ----------
+let bgImg = null;
+let gameOverImg = null;
 
-// ---------- Audio (p5.sound) ----------
-let song = null;           // gameplay song (p5.SoundFile)
-let menuMusic = null;      // menu BGM
-let gameOverMusic = null;  // game over BGM
+// ---------- GAME STATE ----------
+const MENU = 0;
+const PLAY = 1;
+const GAMEOVER = 2;
+let gameState = MENU;
 
-let fft = null;            // p5.FFT
-let peakKick = null;       // p5.PeakDetect to mimic beat.isKick()
-
-// ---------- Notes / Spotlights ----------
+// ---------- NOTES ----------
 const MAX_NOTES = 64;
 let notes = new Array(MAX_NOTES).fill(null);
 
-let prevOnset = false;
+// ---------- SPOTLIGHTS ----------
+const MAX_SPOTS = 16;
+let spots = new Array(MAX_SPOTS).fill(null);
 
+// ---------- BASS FLASH SMOOTHING ----------
 let bassPeak = 1;
 let bassSmooth = 0;
 let lastBass = 0;
 
+// ---------- PENDING SPAWNS (kick rising-edge) ----------
 let pendingSpawns = 0;
 let firstPendingAtMs = -1;
 const SPAWN_DELAY_MS = 200;
 
+// ---------- COOLDOWNS ----------
 let lastSpotlightMs = 0;
 let spotlightCooldownMs = 120;
 
 let lastSpawnMs = 0;
 let spawnCooldownMs = 350;
 
-// ---------- States ----------
-const menu = 0;
-const play = 1;
-const gameOver = 2;
-let gameState = menu;
-
-// ---------- Spotlights ----------
-const MAX_SPOTS = 16;
-let spots = new Array(MAX_SPOTS).fill(null);
-
-// ---------- UI / Images ----------
-let selected = 0;
-let bgImg = null;
-let gameOverImg = null;
-let uiFont = null; // optional: load a font if you have one
-
-// ---------- Paddle / Score ----------
-let paddleX;
-let paddleY;
+// ---------- UI / PADDLE ----------
+let paddleX = 0;
+let paddleY = 0;
 let paddleW = 140;
 let paddleH = 16;
 
+// ---------- SCORE/LIVES ----------
 let score = 0;
 let lives = 3;
 let maxLives = 3;
 
+// ---------- TIMING ----------
 let prevMs = 0;
 
-// ---------- Preload media ----------
+// =======================================================
+// PRELOAD
+// =======================================================
 function preload() {
-  // Images
-  bgImg = safeLoadImage(BG_IMG);
-  gameOverImg = safeLoadImage(GAMEOVER_IMG);
+  // images (draw scaled at render time)
+  bgImg = loadImage("BG_main.png", () => {}, () => { bgImg = null; });
+  gameOverImg = loadImage("game_over.png", () => {}, () => { gameOverImg = null; });
 
-  // Music
-  menuMusic = safeLoadSound(MENU_MUSIC);
-  gameOverMusic = safeLoadSound(GAMEOVER_MUSIC);
+  // audio
+  soundFormats('mp3', 'wav', 'ogg');
+  // menu / gameover
+  menuMusic     = loadSound("Ariana Grande - no tears left to cry (Official Instrumental)-[AudioTrimmer.com].mp3");
+  gameOverMusic = loadSound("Hunter x Hunter 2011 OST 3 - 1 - Kingdom of Predators-[AudioTrimmer.com].mp3");
 
-  // Preload gameplay songs into an array of SoundFiles (same filenames)
+  // gameplay songs (preload all three to avoid async race on start)
   for (let i = 0; i < songFiles.length; i++) {
-    songFiles[i] = ASSET_PATH + songFiles[i];
+    try {
+      const s = loadSound(songFiles[i]);
+      gameSongs.push(s);
+    } catch (e) {
+      gameSongs.push(null);
+    }
   }
 }
 
-function safeLoadImage(name) {
-  if (!name) return null;
-  const path = ASSET_PATH + name;
-  try { return loadImage(path); } catch (e) { return null; }
-}
-
-function safeLoadSound(name) {
-  if (!name) return null;
-  const path = ASSET_PATH + name;
-  try { return loadSound(path); } catch (e) { return null; }
-}
-
-// ---------- Setup ----------
+// =======================================================
+// SETUP / DRAW
+// =======================================================
 function setup() {
   createCanvas(800, 600);
   frameRate(60);
 
-  // Start menu music after first user gesture (ENTER) to satisfy browser policies
+  // analyzer
+  fft = new p5.FFT(0.8, 1024);
+  // approx kick band with a reasonably high threshold
+  peak = new p5.PeakDetect(20, 150, 0.9, 20);
+
   paddleY = height - 80;
+  textFont("Helvetica");
 }
 
-// ---------- Draw ----------
 function draw() {
   const now = millis();
   const dt = (prevMs === 0) ? (1.0 / 60.0) : (now - prevMs) / 1000.0;
   prevMs = now;
 
-  if (gameState === menu) drawMenu();
-  else if (gameState === play) updateAndDrawGame(dt);
-  else if (gameState === gameOver) drawGameOver();
+  if (gameState === MENU) {
+    drawMenu();
+  } else if (gameState === PLAY) {
+    updateAndDrawGame(dt);
+  } else if (gameState === GAMEOVER) {
+    drawGameOver();
+  }
 }
 
-// ---------- Menu ----------
+// =======================================================
+// MENU
+// =======================================================
 function drawMenu() {
   rectMode(CORNER);
   if (bgImg) image(bgImg, 0, 0, width, height);
   else background(18);
 
   textAlign(CENTER, CENTER);
-  if (uiFont) textFont(uiFont);
   fill(255);
   textSize(28);
   text("BEAT CATCHER", width / 2, 90);
   textSize(14);
   fill(200);
-  text("Use arrow keys to select song!    ENTER to start", width / 2, 130);
+  if (!haveInteracted) {
+    text("Press any key/click to enable audio, then use arrows • ENTER to start", width / 2, 130);
+  } else {
+    text("Use arrow keys to select a song • ENTER to start", width / 2, 130);
+  }
 
   const songCardW = 220;
   const songCardH = 120;
@@ -157,8 +161,8 @@ function drawMenu() {
       stroke(40);
       strokeWeight(2);
     } else {
-      fill(40);
       noStroke();
+      fill(40);
     }
     rect(x, y, songCardW, songCardH, 14);
     fill(i === selected ? 30 : 220);
@@ -167,82 +171,61 @@ function drawMenu() {
   }
 }
 
-// ---------- Spotlights ----------
-function addSpotlight(x) {
-  for (let i = 0; i < MAX_SPOTS; i++) {
-    if (spots[i] === null) {
-      spots[i] = new Spotlight(x);
-      return;
-    }
-  }
-}
-
-function updateAndDrawSpotlights() {
-  for (let i = 0; i < MAX_SPOTS; i++) {
-    if (spots[i] != null) {
-      spots[i].update();
-      spots[i].draw();
-      if (spots[i].dead()) spots[i] = null;
-    }
-  }
-}
-
-// ---------- Gameplay ----------
+// =======================================================
+// GAME LOOP (PLAY)
+// =======================================================
 function updateAndDrawGame(dt) {
   rectMode(CORNER);
   if (bgImg) image(bgImg, 0, 0, width, height);
   else background(24);
 
+  // Paddle follows mouse, clamped
   paddleX = constrain(mouseX, paddleW / 2, width - paddleW / 2);
 
-  // --- Analysis / beat detection ---
+  // --- AUDIO ANALYSIS ONLY IF THE GAMEPLAY SONG IS PLAYING ---
   if (song && song.isPlaying()) {
-    if (fft) {
-      // Bass "sum" via getEnergy(20..150), scaled 0..255
-      const bassEnergy = fft.getEnergy(20, 150); // 0..255
-      // Smooth & normalize (mirror your bassPeak logic)
-      bassPeak = Math.max(1, Math.max(bassPeak * 0.96, bassEnergy));
-      const norm = bassEnergy / bassPeak; // ~0..1 normalized
-      bassSmooth = lerp(bassSmooth, norm, 0.2);
+    fft.analyze();
 
-      // Rising edge & thresholds (unchanged semantics)
-      const rise = bassSmooth - lastBass;
-      const strong = (bassSmooth > 0.45 && rise > 0.025) || (bassSmooth > 0.75 && rise > 0.015);
+    // Bass energy for spotlight flashes
+    const sumBass = fft.getEnergy(20, 150); // 0..255
+    bassPeak = Math.max(1, Math.max(bassPeak * 0.96, sumBass));
+    const norm = sumBass / bassPeak;
+    bassSmooth = lerp(bassSmooth, norm, 0.2);
 
-      const nowMs = millis();
-      if (strong && (nowMs - lastSpotlightMs) > spotlightCooldownMs) {
-        addSpotlight(random(60, width - 60));
-        if (bassSmooth > 0.90 && random(1) < 0.4) addSpotlight(random(60, width - 60));
-        lastSpotlightMs = nowMs;
-      }
+    const rise = bassSmooth - lastBass;
+    const strong = (bassSmooth > 0.45 && rise > 0.025) || (bassSmooth > 0.75 && rise > 0.015);
 
-      lastBass = bassSmooth;
+    const nowMs = millis();
+    if (strong && (nowMs - lastSpotlightMs) > spotlightCooldownMs) {
+      addSpotlight(random(60, width - 60));
+      if (bassSmooth > 0.90 && random() < 0.4) addSpotlight(random(60, width - 60));
+      lastSpotlightMs = nowMs;
     }
+    lastBass = bassSmooth;
 
-    // Replace Minim BeatDetect.isKick() with p5.PeakDetect in low band
-    if (peakKick && fft) {
-      peakKick.update(fft);
-      const onset = !!peakKick.isDetected;
-      const now = millis();
+    // Beat detection ≈ kick
+    peak.update(fft);
+    const onset = peak.isDetected;
+    const now = millis();
 
-      if (onset && !prevOnset) {
-        pendingSpawns++;
-        if (firstPendingAtMs === -1) firstPendingAtMs = now;
+    if (onset && !prevOnset) {
+      pendingSpawns++;
+      if (firstPendingAtMs === -1) firstPendingAtMs = now;
+    }
+    prevOnset = onset;
+
+    // Delayed spawn to align visuals, with cooldown & cap
+    if (pendingSpawns > 0 && firstPendingAtMs !== -1 && (now - firstPendingAtMs) >= SPAWN_DELAY_MS) {
+      if (countActiveNotes() < 22 && (now - lastSpawnMs) > spawnCooldownMs) {
+        spawn();
+        lastSpawnMs = now;
+        pendingSpawns--;
       }
-      prevOnset = onset;
-
-      if (pendingSpawns > 0 && firstPendingAtMs !== -1 && (now - firstPendingAtMs) >= SPAWN_DELAY_MS) {
-        if (countActiveNotes() < 22 && (now - lastSpawnMs) > spawnCooldownMs) {
-          spawn();
-          lastSpawnMs = now;
-          pendingSpawns--;
-        }
-        firstPendingAtMs = (pendingSpawns > 0) ? now : -1;
-      }
+      firstPendingAtMs = (pendingSpawns > 0) ? now : -1;
     }
   }
 
-  // Spotlights
+  // Spotlights only in PLAY
   updateAndDrawSpotlights();
 
   // Paddle
@@ -255,15 +238,16 @@ function updateAndDrawGame(dt) {
   fill(255);
   noStroke();
   for (let i = 0; i < MAX_NOTES; i++) {
-    if (notes[i] != null) {
-      notes[i].update(dt);
-      notes[i].drawNote();
-      if (circleRectOverlap(notes[i].x, notes[i].y, notes[i].r, paddleX - paddleW / 2, paddleY - paddleH / 2, paddleW, paddleH)) {
+    const n = notes[i];
+    if (n) {
+      n.update(dt);
+      n.drawNote();
+      if (circleRectOverlap(n.x, n.y, n.r, paddleX - paddleW / 2, paddleY - paddleH / 2, paddleW, paddleH)) {
         score++;
         notes[i] = null;
         continue;
       }
-      if (notes[i] && notes[i].offScreen()) {
+      if (notes[i] && n.offScreen()) {
         notes[i] = null;
         lives--;
         if (lives <= 0) {
@@ -274,74 +258,101 @@ function updateAndDrawGame(dt) {
     }
   }
 
-  // HUD
-  drawdesign();
+  drawHUD();
 }
 
-function drawdesign() {
+// =======================================================
+// HUD
+// =======================================================
+function drawHUD() {
   textAlign(LEFT, TOP);
-  if (uiFont) textFont(uiFont);
   fill(255);
   textSize(16);
-  text("Score: " + score, 18, 16);
+  text(`Score: ${score}`, 18, 16);
 
   let hearts = "";
   for (let i = 0; i < lives; i++) hearts += "<3 ";
   fill(255, 120, 120);
-  text("Lives: " + hearts, 18, 40);
+  text(`Lives: ${hearts}`, 18, 40);
 }
 
-// Circle-rect overlap (same math)
-function circleRectOverlap(cx, cy, cr, rx, ry, rw, rh) {
-  const nearestX = constrain(cx, rx, rx + rw);
-  const nearestY = constrain(cy, ry, ry + rh);
-  const dx = cx - nearestX;
-  const dy = cy - nearestY;
-  return (dx * dx + dy * dy) <= cr * cr;
-}
-
-// ---------- Game Over ----------
+// =======================================================
+// GAME OVER
+// =======================================================
 function drawGameOver() {
   if (gameOverImg) image(gameOverImg, 0, 0, width, height);
   else {
     background(10);
     textAlign(CENTER, CENTER);
-    if (uiFont) textFont(uiFont);
     fill(255);
     textSize(32);
     text("GAME OVER", width / 2, height / 2 - 40);
   }
   textAlign(CENTER, CENTER);
-  if (uiFont) textFont(uiFont);
   fill(255);
   textSize(18);
-  text("Score: " + score, width / 2, height / 2 + 10);
+  text(`Score: ${score}`, width / 2, height / 2 + 10);
   fill(220);
   textSize(14);
   text("Press R to restart • ENTER for Menu", width / 2, height / 2 + 40);
 }
 
-// ---------- State helpers ----------
-function startGame() {
-  // ensure audio context is started by a gesture
-  userStartAudio();
+// =======================================================
+// SPOTLIGHTS
+// =======================================================
+function addSpotlight(x) {
+  for (let i = 0; i < MAX_SPOTS; i++) {
+    if (spots[i] === null) {
+      spots[i] = new Spotlight(x);
+      return;
+    }
+  }
+}
 
-  if (menuMusic && menuMusic.isPlaying()) menuMusic.pause();
-  if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.pause();
+function updateAndDrawSpotlights() {
+  for (let i = 0; i < MAX_SPOTS; i++) {
+    const s = spots[i];
+    if (s) {
+      s.update();
+      s.draw();
+      if (s.dead()) spots[i] = null;
+    }
+  }
+}
 
-  pendingSpawns = 0;
-  firstPendingAtMs = -1;
-  clearNotes();
-  score = 0;
-  lives = maxLives;
-  lastSpawnMs = 0;
-  prevOnset = false;
-  lastBass = 0;
+function clearSpotlights() {
+  for (let i = 0; i < MAX_SPOTS; i++) spots[i] = null;
+  lastSpotlightMs = 0;
+  // also reset bass smoothing so no carry-over
   bassPeak = 1;
   bassSmooth = 0;
+  lastBass = 0;
+}
 
-  loadSelectedSong();
-  gameState = play;
+// =======================================================
+// STATE CONTROL
+// =======================================================
+function startGame() {
+  stopAllMusic();       // kill everything first
+  clearNotes();
+  clearSpotlights();
+  resetBeatPipeline();
+
+  score = 0;
+  lives = maxLives;
+
+  // pick preloaded song
+  song = gameSongs[selected] || null;
+  if (song) {
+    song.stop();
+    song.play();
+    fft.setInput(song);
+  } else {
+    // no song loaded? ensure fft reads nothing
+    fft.setInput(null);
+  }
+
+  gameState = PLAY;
 }
 
 function restartGame() {
@@ -350,78 +361,94 @@ function restartGame() {
 }
 
 function backToMenu() {
-  if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.pause();
-  if (menuMusic) {
-    menuMusic.stop();
-    menuMusic.loop();
-  }
-  stopSong();
+  stopAllMusic();       // ensures game-over track is stopped
   clearNotes();
-  gameState = menu;
+  clearSpotlights();
+  resetBeatPipeline();
+  fft.setInput(null);
+  gameState = MENU;
+  if (menuMusic) menuMusic.loop();
 }
 
 function goGameOver() {
-  if (song) song.pause();
-  if (gameOverMusic) {
-    gameOverMusic.stop();
-    gameOverMusic.play();
-  }
-  stopSong();
-  gameState = gameOver;
+  stopAllMusic();       // stop gameplay + menu
+  gameState = GAMEOVER;
+  if (gameOverMusic) gameOverMusic.play();
 }
 
-function clearNotes() {
-  for (let i = 0; i < MAX_NOTES; i++) notes[i] = null;
+function resetBeatPipeline() {
+  prevOnset = false;
+  pendingSpawns = 0;
+  firstPendingAtMs = -1;
+  lastSpawnMs = 0;
 }
 
-function loadSelectedSong() {
-  stopSong();
-  // Load on demand (playback starts at user gesture)
-  song = loadSound(songFiles[selected], () => {
-    // Once loaded, wire FFT + PeakDetect and play
-    fft = new p5.FFT(0.8, 1024);
-    fft.setInput(song);
-
-    // Mimic "kick" band ~ 20-150 Hz, threshold ~0.15..0.2; play with framesPerPeak ~ 20 (like sensitivity)
-    peakKick = new p5.PeakDetect(20, 150, 0.15, 20);
-
-    song.play(); // start from beginning
-  }, (err) => {
-    // load error; fail gracefully
-    console.error("Error loading song:", err);
-  });
-}
-
+// =======================================================
+// MUSIC HELPERS
+// =======================================================
 function stopSong() {
   if (song) {
     song.stop();
+    song.disconnect();
     song = null;
+    fft.setInput(null);
   }
 }
 
-// ---------- Input ----------
+function stopAllMusic() {
+  if (song) { song.stop(); song.disconnect(); song = null; }
+  if (menuMusic) menuMusic.stop();
+  if (gameOverMusic) gameOverMusic.stop();
+}
+
+// =======================================================
+// INPUT
+// =======================================================
 function keyPressed() {
-  if (gameState === menu) {
-    if (keyCode === LEFT_ARROW) selected = (selected + 2) % 3;
-    else if (keyCode === RIGHT_ARROW) selected = (selected + 1) % 3;
-    else if (keyCode === ENTER || keyCode === RETURN) {
-      // Start menu music if not already
-      if (menuMusic && !menuMusic.isPlaying()) {
-        menuMusic.loop();
-      }
+  // first gesture: enable audio + loop menu music if in MENU
+  if (!haveInteracted) {
+    userStartAudio();
+    haveInteracted = true;
+    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) {
+      menuMusic.loop();
+    }
+  }
+
+  if (gameState === MENU) {
+    if (keyCode === LEFT_ARROW) {
+      selected = (selected + songFiles.length - 1) % songFiles.length;
+    } else if (keyCode === RIGHT_ARROW) {
+      selected = (selected + 1) % songFiles.length;
+    } else if (keyCode === ENTER || keyCode === RETURN) {
       startGame();
     }
-  } else if (gameState === gameOver) {
-    if (key === 'r' || key === 'R') restartGame();
-    else if (keyCode === ENTER || keyCode === RETURN) backToMenu();
+  } else if (gameState === GAMEOVER) {
+    if (key === 'r' || key === 'R') {
+      restartGame();
+    } else if (keyCode === ENTER || keyCode === RETURN) {
+      backToMenu();
+    }
   }
 }
 
-// ---------- Spawning ----------
+// Also treat first mouse click as an audio unlock
+function mousePressed() {
+  if (!haveInteracted) {
+    userStartAudio();
+    haveInteracted = true;
+    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) {
+      menuMusic.loop();
+    }
+  }
+}
+
+// =======================================================
+// SPAWNING
+// =======================================================
 function spawn() {
   if (countActiveNotes() >= 22) return;
   for (let i = 0; i < MAX_NOTES; i++) {
-    if (notes[i] == null) {
+    if (notes[i] === null) {
       notes[i] = new Note(random(30, width - 30), -20, 200, random(12, 20));
       return;
     }
@@ -430,11 +457,28 @@ function spawn() {
 
 function countActiveNotes() {
   let c = 0;
-  for (let i = 0; i < MAX_NOTES; i++) if (notes[i] != null) c++;
+  for (let i = 0; i < MAX_NOTES; i++) if (notes[i] !== null) c++;
   return c;
 }
 
-// ---------- Classes ----------
+function clearNotes() {
+  for (let i = 0; i < MAX_NOTES; i++) notes[i] = null;
+}
+
+// =======================================================
+// GEOMETRY
+// =======================================================
+function circleRectOverlap(cx, cy, cr, rx, ry, rw, rh) {
+  const nearestX = constrain(cx, rx, rx + rw);
+  const nearestY = constrain(cy, ry, ry + rh);
+  const dx = cx - nearestX;
+  const dy = cy - nearestY;
+  return (dx * dx + dy * dy) <= cr * cr;
+}
+
+// =======================================================
+// CLASSES
+// =======================================================
 class Note {
   constructor(startX, startY, speed, radius) {
     this.x = startX;
@@ -454,15 +498,15 @@ class Note {
 }
 
 class Spotlight {
-  constructor(_x) {
-    this.x = _x;
+  constructor(x) {
+    this.x = x;
     this.angle = random(-0.15, 0.15);
     this.w = random(60, 120);
     this.h = random(260, 420);
     this.a = 180;
     this.decay = random(4, 7);
 
-    // soft neon range: pink-blue-purple
+    // soft neon range
     this.r = random(100, 255);
     this.g = random(0, 150);
     this.b = random(150, 255);
@@ -477,15 +521,13 @@ class Spotlight {
     push();
     translate(this.x, height);
     rotate(this.angle);
-    drawingContext.save();
     blendMode(ADD);
     noStroke();
 
     for (let i = 0; i < 4; i++) {
       const t = 1 - i * 0.22;
-      const al = this.a * (0.55 - i * 0.12);
+      const al = int(this.a * (0.55 - i * 0.12));
       if (al <= 0) continue;
-
       fill(this.r, this.g, this.b, al);
       const ww = this.w * t;
       const hh = -this.h * t;
@@ -493,10 +535,10 @@ class Spotlight {
     }
 
     blendMode(BLEND);
-    drawingContext.restore();
     pop();
   }
 }
+
 
 
 
