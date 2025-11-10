@@ -86,7 +86,11 @@ function preload(){
     (e) => console.warn('Game over music failed to load', e)
   );
 }
-
+function playFromStart(snd){
+  if (!snd) return;
+  try { snd.stop(); } catch(e){}
+  try { snd.play(); } catch(e){}
+}
 /******************* Setup (YOUR ORIGINAL SIZE) *******************/
 function setup(){
   createCanvas(800, 600);     // <- your PDE had size(800, 600)
@@ -94,7 +98,7 @@ function setup(){
   userStartAudio(); // ensure AudioContext is unlocked
 
   fft = new p5.FFT(0.85, 1024);
-  peak = new p5.PeakDetect(20, 120, 0.9, 20); // your “low band ~ kick”
+  peak = new p5.PeakDetect(20, 120, 0.72, 20); // your “low band ~ kick”
 
   // Loop menu music (autoplay may wait for user gesture on some browsers)
   if (menuMusic) {
@@ -194,7 +198,7 @@ function selectSong(i){
 }
 
 function startGame(){
-  // Stop menu/game-over tracks (match PDE behavior)
+  // Stop menu/game-over tracks
   if (menuMusic && menuMusic.isPlaying()) menuMusic.pause();
   if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop();
 
@@ -203,10 +207,10 @@ function startGame(){
   const s = songs[selected];
   if (!s){ console.warn('Selected song not loaded yet'); return; }
 
-  // Start gameplay track
+  // ✅ ALWAYS restart the track from 0
   currentSong = s;
   currentSong.setLoop(false);
-  currentSong.play();
+  playFromStart(currentSong);
 
   resetGame();
   gameState = PLAY;
