@@ -1,61 +1,64 @@
-// BeatCatcher — Processing (Minim) -> p5.js (p5.sound) single‑file port
-// ---------------------------------------------------------------
-// If you see an endless "Loading…" message, follow this checklist:
-// 1) Serve locally (NOT file://). Use VS Code Live Server or: python -m http.server 8000
-// 2) Create an ./assets/ folder next to index.html
-// 3) Put ONE small test MP3 in ./assets/ named test.mp3 (exactly)
-// 4) Keep only that one file in songFiles below while debugging
-// 5) Open DevTools (Chrome: Cmd+Opt+I on Mac) and check Console for errors
-// 6) Once it works, add your real filenames back one by one
+// BeatCatcher — p5.js (merged game logic + your PDE visuals & music)
+// ------------------------------------------------------------------
+// Folder structure (next to index.html):
+//   ./assets/
+//     BG_main.png
+//     game_over.png
+//     Ariana Grande - no tears left to cry (Official Instrumental)-[AudioTrimmer.com].mp3
+//     Hunter x Hunter 2011 OST 3 - 1 - Kingdom of Predators-[AudioTrimmer.com].mp3
+//     Majid Jordan with Drake - Stars Align (Official Visualizer).mp3
+//     Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3
+//     Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3
 //
-// Libraries required in index.html (load p5.sound after p5.js):
-//   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
-//   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js"></script>
+// HTML needs p5 + p5.sound (sound AFTER p5):
+// <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+// <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js"></script>
 
 /***** Assets *****/
-// Start with ONE known-good file while debugging
+let bgImg, gameOverImg;
+
+// Gameplay songs (lazy-loaded on selection)
 let songFiles = [
   "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
   "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
   "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
 ];
-let songTitles = ["Stars Align", "California Roll", "2000 Excursion"]; // keep in sync with songFiles while debugging
+let songTitles = ["Stars Align", "California Roll", "2000 Excursion"];
+let songs = []; // p5.SoundFile[] (loaded on demand)
 
-/***** Audio + Analysis *****/
-let songs = [];            // p5.SoundFile[]
-let fft;                   // p5.FFT
-let peak;                  // p5.PeakDetect (low band kick-ish)
-let currentSong = null;
+// Menu + Game Over music (your exact files)
+let menuMusic = null;
+let gameOverMusic = null;
+
+/***** Audio Analysis *****/
+let fft;                 // p5.FFT
+let peak;                // p5.PeakDetect for kick-ish onsets
+let currentSong = null;  // active gameplay song
 
 /***** Game State *****/
 const MENU = 0, PLAY = 1, GAME_OVER = 2;
 let gameState = MENU;
-let selected = 0;          // selected song index on menu
+let selected = 0;        // selected song index on menu
 
-/***** Notes *****/
+/***** Notes & Spotlights *****/
 const MAX_NOTES = 64;
-let notes = [];            // array of Note instances or null
-
-/***** Spotlights *****/
+let notes = new Array(MAX_NOTES).fill(null);
 const MAX_SPOTS = 16;
-let spots = [];            // array of Spotlight instances or null
+let spots = new Array(MAX_SPOTS).fill(null);
 
-/***** Rhythm / spawning *****/
-let prevOnset = false;     // rising-edge detection of kick
-let lastSpawnMs = 0;       // cooldown for note spawns
+/***** Rhythm / Spawning *****/
+let prevOnset = false;         // rising-edge detection
+let lastSpawnMs = 0;           // cooldown for note spawns
 let spawnCooldownMs = 350;
 
-// Stagger spawns slightly so clusters don’t drop same frame
-let pendingSpawns = 0;     
-let firstPendingAtMs = -1; 
+let pendingSpawns = 0;         // staggered spawns (cluster smoothing)
+let firstPendingAtMs = -1;
 const SPAWN_DELAY_MS = 200;
 
-// Spotlight throttling
-let lastSpotlightMs = 0;
+let lastSpotlightMs = 0;       // spotlight throttle
 let spotlightCooldownMs = 120;
 
-// Bass envelope
-let bassPeak = 1;
+let bassPeak = 1;              // stage flash normalization
 let bassSmooth = 0;
 let lastBass = 0;
 
@@ -69,79 +72,63 @@ const maxLives = 3;
 /***** Timing *****/
 let prevMs = 0;
 
-/***** Visuals *****/
-let useHalftone = false;   // kept simple; toggle if you want
-
+/******************* Preload *******************/
 function preload(){
-  // Help the loader pick a codec
   soundFormats('mp3','wav','ogg');
-  // Do NOT bulk-load many big files while debugging. Start with the first only.
-  if (songFiles.length > 0){
-    songs[0] = loadSound(`assets/${songFiles[0]}`,
-      () => { console.log('Loaded:', songFiles[0]); },
-      (e) => { console.error('Failed to load', songFiles[0], e); }
-    );
-  }
+
+  // Backgrounds
+  bgImg = loadImage('assets/BG_main.png', null, () => console.warn('Missing assets/BG_main.png'));
+  gameOverImg = loadImage('assets/game_over.png', null, () => console.warn('Missing assets/game_over.png'));
+
+  // Menu & Game Over music (your filenames)
+  menuMusic = loadSound('assets/Ariana Grande - no tears left to cry (Official Instrumental)-[AudioTrimmer.com].mp3',
+    () => console.log('Menu music loaded'),
+    (e) => console.warn('Menu music failed to load', e)
+  );
+  gameOverMusic = loadSound('assets/Hunter x Hunter 2011 OST 3 - 1 - Kingdom of Predators-[AudioTrimmer.com].mp3',
+    () => console.log('Game over music loaded'),
+    (e) => console.warn('Game over music failed to load', e)
+  );
 }
 
 function setup(){
   createCanvas(windowWidth, windowHeight);
-  textFont('monospace');
   textAlign(CENTER, CENTER);
-
-  // Ensure AudioContext is running (prevents some browsers from stalling)
-  userStartAudio();
+  userStartAudio(); // ensure AudioContext is unlocked
 
   fft = new p5.FFT(0.85, 1024);
-  peak = new p5.PeakDetect(20, 120, 0.9, 20); // low band ~kick, tuned later
+  peak = new p5.PeakDetect(20, 120, 0.9, 20); // low band ~ kick
 
-  // Prepare containers
-  for (let i = 0; i < MAX_NOTES; i++) notes[i] = null;
-  for (let i = 0; i < MAX_SPOTS; i++) spots[i] = null;
+  // Loop menu music (autoplay may wait for user gesture on some browsers)
+  if (menuMusic) {
+    menuMusic.setLoop(true);
+    try { if (!menuMusic.isPlaying()) menuMusic.play(); } catch (e) {}
+  }
 }
 
-function windowResized(){
-  resizeCanvas(windowWidth, windowHeight);
-}
+function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 
 function draw(){
-  background(12);
-
-  // Delta time in seconds
   const now = millis();
   const dt = (prevMs === 0) ? (1/60) : (now - prevMs) / 1000.0;
   prevMs = now;
 
-  // Simple loading status if nothing is ready yet
-  const anyLoaded = songs.some(s => s && s.buffer && s.buffer.duration > 0);
-
-  switch (gameState){
-    case MENU:
-      if (!anyLoaded){
-        fill(220);
-        textSize(16);
-        text(`Loading… Make sure you are SERVING files (not opening via file://)
-• ./assets/test.mp3 must exist
-• See Console for errors (Cmd+Opt+I → Console).`, width/2, height/2);
-      }
-      drawMenu();
-      break;
-    case PLAY: runGame(dt); break;
-    case GAME_OVER: drawGameOver(); break;
-  }
+  if (gameState === MENU) drawMenu();
+  else if (gameState === PLAY) runGame(dt);
+  else if (gameState === GAME_OVER) drawGameOver();
 }
 
 /******************* MENU *******************/
 function drawMenu(){
-  push();
-  fill(240);
-  textSize(28);
-  text('BeatCatcher', width/2, height*0.18);
-  textSize(14);
-  text('Click a card to pick a track. Press SPACE to start / pause.', width/2, height*0.18 + 28);
-  pop();
+  rectMode(CORNER);
+  if (bgImg) image(bgImg, 0, 0, width, height); else background(18);
 
-  // Layout song cards (number = songFiles.length)
+  fill(255);
+  textSize(28);
+  text('BEAT CATCHER', width/2, 90);
+  textSize(14); fill(200);
+  text('Use ←/→ to select • ENTER/SPACE to start • Click a card to load', width/2, 130);
+
   const n = max(1, songFiles.length);
   const songCardW = 220;
   const songCardH = 120;
@@ -151,37 +138,20 @@ function drawMenu(){
   const y = height/2 - songCardH/2;
 
   for (let i = 0; i < n; i++){
-    const x = startX + i * (songCardW + spacing);
-    drawSongCard(i, x, y, songCardW, songCardH, i === selected);
+    const x = startX + i*(songCardW + spacing);
+    if (i === selected){ fill(255,230,120); stroke(40); strokeWeight(2);} else { fill(40); noStroke(); }
+    rect(x, y, songCardW, songCardH, 14);
+    fill(i === selected ? 30 : 220);
+    textSize(16);
+    text(songTitles[i] || `Track ${i+1}`, x + songCardW/2, y + songCardH/2);
   }
-
-  // Instructions footer
-  fill(180);
-  textSize(12);
-  text('Arrow keys to change selection • Click to choose • SPACE to play/pause', width/2, height - 28);
-}
-
-function drawSongCard(i, x, y, w, h, active){
-  push();
-  stroke(active ? color(0,255,180) : 90);
-  strokeWeight(active ? 3 : 1);
-  fill(active ? 24 : 16);
-  rect(x, y, w, h, 16);
-
-  fill(230);
-  textSize(16);
-  const title = songTitles[i] || `Track ${i+1}`;
-  text(title , x + w/2, y + h/2 - 8);
-  fill(160);
-  textSize(12);
-  const label = (songFiles[i]||'').slice(0, 30) + ((songFiles[i]||'').length>30?'…':'');
-  text(label, x + w/2, y + h/2 + 14);
-  pop();
 }
 
 function mousePressed(){
   if (gameState === MENU){
-    // Hit test cards
+    // start/ensure menu music plays after gesture
+    if (menuMusic && !menuMusic.isPlaying()) menuMusic.play();
+
     const n = max(1, songFiles.length);
     const songCardW = 220, songCardH = 120, spacing = 30;
     const totalW = n * songCardW + (n-1) * spacing;
@@ -191,11 +161,11 @@ function mousePressed(){
       const x = startX + i*(songCardW + spacing);
       if (mouseX >= x && mouseX <= x+songCardW && mouseY >= y && mouseY <= y+songCardH){
         selectSong(i);
-        return;
+        selected = i;
       }
     }
-  } else if (gameState === PLAY){
-    // User gesture helps ensure audio resumes if paused by browser
+  }
+  if (gameState === PLAY){
     if (currentSong && !currentSong.isPlaying()) currentSong.play();
   }
 }
@@ -203,82 +173,74 @@ function mousePressed(){
 function keyPressed(){
   if (gameState === MENU){
     const n = max(1, songFiles.length);
-    if (keyCode === LEFT_ARROW){ selected = (selected + n - 1) % n; }
-    else if (keyCode === RIGHT_ARROW){ selected = (selected + 1) % n; }
-    else if (key === ' '){ startGame(); }
-    else if (keyCode === ENTER){ startGame(); }
+    if (keyCode === LEFT_ARROW) selected = (selected + n - 1) % n;
+    else if (keyCode === RIGHT_ARROW) selected = (selected + 1) % n;
+    else if (keyCode === ENTER || keyCode === RETURN || key === ' ') startGame();
   } else if (gameState === PLAY){
-    if (key === ' '){ togglePause(); }
+    if (key === ' ') togglePause();
   } else if (gameState === GAME_OVER){
-    if (key === ' ' || keyCode === ENTER){ goMenu(); }
+    if (key === 'r' || key === 'R') restartGame();
+    else if (keyCode === ENTER || keyCode === RETURN || key === ' ') backToMenu();
   }
 }
 
 function selectSong(i){
   selected = i;
-  // Lazy-load on selection if not already loaded
   if (!songs[i]){
     const name = songFiles[i];
-    if (!name){ console.warn('No filename for index', i); return; }
-    console.log('Loading on-demand:', name);
+    if (!name) return;
+    console.log('Loading:', name);
     songs[i] = loadSound(`assets/${name}`,
-      () => { console.log('Loaded:', name); },
-      (e) => { console.error('Failed to load', name, e); }
+      () => console.log('Loaded', name),
+      (e) => console.error('Failed to load', name, e)
     );
   }
 }
 
 function startGame(){
-  // Stop any current track
-  for (let s of songs) if (s && s.isPlaying()) s.stop();
+  // Stop menu/game-over tracks
+  if (menuMusic && menuMusic.isPlaying()) menuMusic.pause();
+  if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop();
+
+  // Ensure selection is loaded
+  if (!songs[selected]) selectSong(selected);
   const s = songs[selected];
-  if (!s){
-    console.warn('Selected song not loaded yet. Try again after it finishes loading.');
-    return;
-  }
+  if (!s){ console.warn('Selected song not loaded yet'); return; }
+
+  // Start gameplay track
   currentSong = s;
-  currentSong.play();
   currentSong.setLoop(false);
+  currentSong.play();
+
   resetGame();
   gameState = PLAY;
 }
 
-function togglePause(){
-  if (!currentSong) return;
-  if (currentSong.isPlaying()) currentSong.pause(); else currentSong.play();
-}
+function togglePause(){ if (!currentSong) return; currentSong.isPlaying() ? currentSong.pause() : currentSong.play(); }
+function restartGame(){ if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop(); startGame(); }
+function backToMenu(){ if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop(); if (menuMusic){ try{ menuMusic.stop(); menuMusic.loop(); }catch(e){} } stopAllSongs(); clearNotes(); gameState = MENU; }
+function goGameOver(){ if (currentSong) currentSong.pause(); if (gameOverMusic){ try{ gameOverMusic.stop(); gameOverMusic.play(); }catch(e){} } stopAllSongs(); gameState = GAME_OVER; }
 
-function goMenu(){
-  // Stop audio
-  for (let s of songs) if (s && s.isPlaying()) s.stop();
-  currentSong = null;
-  gameState = MENU;
-}
-
-function resetGame(){
-  score = 0; lives = maxLives;
-  for (let i = 0; i < MAX_NOTES; i++) notes[i] = null;
-  for (let i = 0; i < MAX_SPOTS; i++) spots[i] = null;
-  lastSpawnMs = 0; pendingSpawns = 0; firstPendingAtMs = -1;
-  bassPeak = 1; bassSmooth = 0; lastBass = 0; prevOnset = false;
-}
+function stopAllSongs(){ for (const s of songs) if (s && s.isPlaying()) s.stop(); currentSong = null; }
+function resetGame(){ score = 0; lives = maxLives; clearNotes(); spots = new Array(MAX_SPOTS).fill(null); lastSpawnMs = 0; pendingSpawns = 0; firstPendingAtMs = -1; bassPeak = 1; bassSmooth = 0; lastBass = 0; prevOnset = false; }
+function clearNotes(){ for (let i = 0; i < MAX_NOTES; i++) notes[i] = null; }
 
 /******************* PLAY LOOP *******************/
 function runGame(dt){
-  // Attach analysis to current audio
-  if (currentSong){
-    fft.setInput(currentSong);
-  }
-  const spec = fft.analyze();
-  peak.update(fft); // for kick-like onset
+  rectMode(CORNER);
+  if (bgImg) image(bgImg, 0, 0, width, height); else background(24);
 
-  // Bass envelope + normalization
+  // FFT/Peak analysis attached to current song
+  if (currentSong) fft.setInput(currentSong);
+  const spec = fft.analyze();
+  peak.update(fft);
+
+  // Bass envelope
   const bass = fft.getEnergy('bass') / 255.0; // 0..1
-  // Smooth with exponential moving average
   bassSmooth = lerp(bassSmooth, bass, 0.25);
   bassPeak = max(bassPeak * 0.995, bassSmooth + 1e-4);
 
-  // Spotlight trigger: strong rising bass OR very high bass
+  // Spotlight trigger
   const norm = (bassPeak <= 0) ? 0 : (bassSmooth / bassPeak);
   const rise = bassSmooth - lastBass;
   const strong = (bassSmooth > 0.45 && rise > 0.025) || (bassSmooth > 0.75 && rise > 0.015);
@@ -289,53 +251,40 @@ function runGame(dt){
   }
   lastBass = bassSmooth;
 
-  // Onset (kick-ish)
+  // Onset-based spawning (rising edge)
   const onset = peak.isDetected;
   if (onset && !prevOnset){
-    // Queue a few staggered spawns (imitates your pending system)
     pendingSpawns++;
     if (firstPendingAtMs < 0) firstPendingAtMs = nowMs;
   }
   prevOnset = onset;
 
-  // Release pending spawns over time
+  // Release pending spawns with slight delay
   if (pendingSpawns > 0 && nowMs - firstPendingAtMs >= SPAWN_DELAY_MS){
     trySpawnNote();
     pendingSpawns--;
     firstPendingAtMs = (pendingSpawns > 0) ? nowMs : -1;
   }
 
-  // Spawn cooldown safety
+  // Safety cooldown (optional immediate spawn disabled)
   if (onset && (nowMs - lastSpawnMs) > spawnCooldownMs){
-    // optional immediate spawn in addition to the pending queue
-    // trySpawnNote();
     lastSpawnMs = nowMs;
   }
 
-  // Update + draw
+  // Stage effects
   drawStageBackdrop(norm);
 
-  // Notes
-  stroke(255);
-  noFill();
+  // Notes update/draw
   for (let i = 0; i < MAX_NOTES; i++){
     const n = notes[i];
     if (!n) continue;
     n.update(dt);
     n.draw();
-    // Collision with paddle
+
     const hit = circleRectCollide(n.x, n.y, n.r, mouseX - paddleW/2, height - 42, paddleW, paddleH);
-    if (hit){
-      score += 10;
-      notes[i] = null; // collect
-      continue;
-    }
-    // Missed
-    if (n.offScreen()){
-      notes[i] = null;
-      lives--;
-      if (lives <= 0){ gameState = GAME_OVER; }
-    }
+    if (hit){ score += 10; notes[i] = null; continue; }
+
+    if (n.offScreen()){ notes[i] = null; lives--; if (lives <= 0) goGameOver(); }
   }
 
   // Spotlights
@@ -347,17 +296,15 @@ function runGame(dt){
     if (s.dead()) spots[i] = null;
   }
 
-  // Paddle
+  // Paddle + HUD
   drawPaddle();
-
-  // HUD
   drawHUD();
 }
 
 function drawStageBackdrop(norm){
   push();
   noStroke();
-  // Dark stage gradient
+  // Subtle stage layers
   for (let i = 0; i < 10; i++){
     const t = i / 9;
     fill(10 + 30*t, 10 + 30*t, 16 + 40*t);
@@ -372,11 +319,14 @@ function drawStageBackdrop(norm){
 
 function drawHUD(){
   push();
-  fill(255);
-  textSize(14);
   textAlign(LEFT, TOP);
-  text(`Score: ${score}`, 16, 14);
-  text(`Lives: ${lives}/${maxLives}`, 16, 34);
+  fill(255);
+  textSize(16);
+  text(`Score: ${score}`, 18, 16);
+  let hearts = '';
+  for (let i = 0; i < lives; i++) hearts += '<3 ';
+  fill(255,120,120);
+  text(`Lives: ${hearts}`, 18, 40);
   pop();
 }
 
@@ -390,45 +340,29 @@ function drawPaddle(){
 }
 
 function drawGameOver(){
-  push();
+  rectMode(CORNER);
+  if (gameOverImg) image(gameOverImg, 0, 0, width, height); else background(0);
   fill(255);
   textSize(28);
   text('Game Over', width/2, height*0.35);
   textSize(16);
   text(`Final Score: ${score}`, width/2, height*0.35 + 30);
-
-  fill(180);
+  fill(200);
   textSize(14);
-  text('Press SPACE or ENTER to return to menu', width/2, height*0.35 + 58);
-  pop();
+  text('Press R to restart • ENTER for Menu', width/2, height*0.35 + 58);
 }
 
-/******************* Spawning *******************/
+/******************* Spawning & Geometry *******************/
 function trySpawnNote(){
-  // Limit simultaneous notes
   if (countActiveNotes() >= 22) return;
-  // Find open slot
   for (let i = 0; i < MAX_NOTES; i++){
-    if (!notes[i]){
-      notes[i] = new Note(random(30, width-30), -20, 200, random(12, 20));
-      return;
-    }
+    if (!notes[i]){ notes[i] = new Note(random(30, width-30), -20, 200, random(12, 20)); return; }
   }
 }
+function countActiveNotes(){ let c = 0; for (const n of notes) if (n) c++; return c; }
+function addSpotlight(x){ for (let i = 0; i < MAX_SPOTS; i++){ if (!spots[i]){ spots[i] = new Spotlight(x); return; } } }
 
-function countActiveNotes(){
-  let c = 0; for (let n of notes) if (n) c++; return c;
-}
-
-function addSpotlight(x){
-  for (let i = 0; i < MAX_SPOTS; i++){
-    if (!spots[i]){ spots[i] = new Spotlight(x); return; }
-  }
-}
-
-/******************* Geometry *******************/
 function circleRectCollide(cx, cy, r, rx, ry, rw, rh){
-  // Clamp circle center to rect bounds
   const nearestX = constrain(cx, rx, rx + rw);
   const nearestY = constrain(cy, ry, ry + rh);
   const dx = cx - nearestX;
@@ -438,17 +372,9 @@ function circleRectCollide(cx, cy, r, rx, ry, rw, rh){
 
 /******************* Classes *******************/
 class Note{
-  constructor(x, y, vy, r){
-    this.x = x; this.y = y; this.vy = vy; this.r = r;
-  }
+  constructor(x, y, vy, r){ this.x = x; this.y = y; this.vy = vy; this.r = r; }
   update(dt){ this.y += this.vy * dt; }
-  draw(){
-    push();
-    noFill();
-    stroke(255);
-    ellipse(this.x, this.y, this.r*2, this.r*2);
-    pop();
-  }
+  draw(){ push(); noFill(); stroke(255); ellipse(this.x, this.y, this.r*2, this.r*2); pop(); }
   offScreen(){ return this.y - this.r > height; }
 }
 
@@ -460,7 +386,6 @@ class Spotlight{
     this.h = random(260, 420);
     this.a = 180;
     this.decay = random(4, 7);
-    // Color (random but controlled)
     this.r = random(140, 255);
     this.g = random(140, 255);
     this.b = random(140, 255);
@@ -473,10 +398,9 @@ class Spotlight{
     rotate(this.angle);
     blendMode(ADD);
     noStroke();
-    // Multi‑slice triangle beam, fading per slice
     for (let i = 0; i < 4; i++){
       const t = 1 - i * 0.2;
-      const al = this.a * (0.55 - i*0.12);
+      const al = this.a * (0.55 - i * 0.12);
       if (al <= 0) continue;
       fill(this.r, this.g, this.b, al);
       const ww = this.w * t;
@@ -487,6 +411,7 @@ class Spotlight{
     pop();
   }
 }
+
 
 
 
