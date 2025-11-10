@@ -1,24 +1,26 @@
 // BeatCatcher — Processing (Minim) -> p5.js (p5.sound) single‑file port
 // ---------------------------------------------------------------
-// Notes
-// - Put your audio files in an "assets/" folder next to index.html
-// - Browsers require a user gesture to start audio. Click to begin.
-// - You may need to serve locally (e.g., VSCode Live Server) for file loading.
-// - This keeps your original structure: states, cooldowns, pending spawns,
-//   spotlights on bass surges, circle/rect collision, lives/score HUD.
+// If you see an endless "Loading…" message, follow this checklist:
+// 1) Serve locally (NOT file://). Use VS Code Live Server or: python -m http.server 8000
+// 2) Create an ./assets/ folder next to index.html
+// 3) Put ONE small test MP3 in ./assets/ named test.mp3 (exactly)
+// 4) Keep only that one file in songFiles below while debugging
+// 5) Open DevTools (Chrome: Cmd+Opt+I on Mac) and check Console for errors
+// 6) Once it works, add your real filenames back one by one
 //
-// Libraries required in index.html (load AFTER p5.js):
+// Libraries required in index.html (load p5.sound after p5.js):
+//   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
 //   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js"></script>
 
 /***** Assets *****/
+// Start with ONE known-good file while debugging
 let songFiles = [
-  // Use your original filenames; they can include spaces.
-  // Ensure these files exist in ./assets/
-  "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
-  "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
-  "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
+  "test.mp3",
+  // "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
+  // "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
+  // "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
 ];
-let songTitles = ["Stars Align", "California Roll", "2000 Excursion"]; // spelling fixed
+let songTitles = ["Test Track"]; // keep in sync with songFiles while debugging
 
 /***** Audio + Analysis *****/
 let songs = [];            // p5.SoundFile[]
@@ -72,9 +74,14 @@ let prevMs = 0;
 let useHalftone = false;   // kept simple; toggle if you want
 
 function preload(){
-  // Load all songs
-  for (let f of songFiles){
-    songs.push(loadSound(`assets/${f}`));
+  // Help the loader pick a codec
+  soundFormats('mp3','wav','ogg');
+  // Do NOT bulk-load many big files while debugging. Start with the first only.
+  if (songFiles.length > 0){
+    songs[0] = loadSound(`assets/${songFiles[0]}`,
+      () => { console.log('Loaded:', songFiles[0]); },
+      (e) => { console.error('Failed to load', songFiles[0], e); }
+    );
   }
 }
 
@@ -82,6 +89,9 @@ function setup(){
   createCanvas(windowWidth, windowHeight);
   textFont('monospace');
   textAlign(CENTER, CENTER);
+
+  // Ensure AudioContext is running (prevents some browsers from stalling)
+  userStartAudio();
 
   fft = new p5.FFT(0.85, 1024);
   peak = new p5.PeakDetect(20, 120, 0.9, 20); // low band ~kick, tuned later
@@ -103,8 +113,20 @@ function draw(){
   const dt = (prevMs === 0) ? (1/60) : (now - prevMs) / 1000.0;
   prevMs = now;
 
+  // Simple loading status if nothing is ready yet
+  const anyLoaded = songs.some(s => s && s.buffer && s.buffer.duration > 0);
+
   switch (gameState){
-    case MENU: drawMenu(); break;
+    case MENU:
+      if (!anyLoaded){
+        fill(220);
+        textSize(16);
+        text(`Loading… Make sure you are SERVING files (not opening via file://)
+• ./assets/test.mp3 must exist
+• See Console for errors (Cmd+Opt+I → Console).`, width/2, height/2);
+      }
+      drawMenu();
+      break;
     case PLAY: runGame(dt); break;
     case GAME_OVER: drawGameOver(); break;
   }
@@ -120,15 +142,16 @@ function drawMenu(){
   text('Click a card to pick a track. Press SPACE to start / pause.', width/2, height*0.18 + 28);
   pop();
 
-  // Layout 3 song cards
+  // Layout song cards (number = songFiles.length)
+  const n = max(1, songFiles.length);
   const songCardW = 220;
   const songCardH = 120;
   const spacing = 30;
-  const totalW = 3 * songCardW + 2 * spacing;
+  const totalW = n * songCardW + (n-1) * spacing;
   const startX = (width - totalW) / 2;
   const y = height/2 - songCardH/2;
 
-  for (let i = 0; i < 3; i++){
+  for (let i = 0; i < n; i++){
     const x = startX + i * (songCardW + spacing);
     drawSongCard(i, x, y, songCardW, songCardH, i === selected);
   }
@@ -148,21 +171,24 @@ function drawSongCard(i, x, y, w, h, active){
 
   fill(230);
   textSize(16);
-  text(songTitles[i] || `Track ${i+1}` , x + w/2, y + h/2 - 8);
+  const title = songTitles[i] || `Track ${i+1}`;
+  text(title , x + w/2, y + h/2 - 8);
   fill(160);
   textSize(12);
-  text(`${songFiles[i]}`.slice(0, 30) + (songFiles[i].length>30?'…':''), x + w/2, y + h/2 + 14);
+  const label = (songFiles[i]||'').slice(0, 30) + ((songFiles[i]||'').length>30?'…':'');
+  text(label, x + w/2, y + h/2 + 14);
   pop();
 }
 
 function mousePressed(){
   if (gameState === MENU){
     // Hit test cards
+    const n = max(1, songFiles.length);
     const songCardW = 220, songCardH = 120, spacing = 30;
-    const totalW = 3 * songCardW + 2 * spacing;
+    const totalW = n * songCardW + (n-1) * spacing;
     const startX = (width - totalW) / 2;
     const y = height/2 - songCardH/2;
-    for (let i = 0; i < 3; i++){
+    for (let i = 0; i < n; i++){
       const x = startX + i*(songCardW + spacing);
       if (mouseX >= x && mouseX <= x+songCardW && mouseY >= y && mouseY <= y+songCardH){
         selectSong(i);
@@ -177,8 +203,9 @@ function mousePressed(){
 
 function keyPressed(){
   if (gameState === MENU){
-    if (keyCode === LEFT_ARROW){ selected = (selected + 2) % 3; }
-    else if (keyCode === RIGHT_ARROW){ selected = (selected + 1) % 3; }
+    const n = max(1, songFiles.length);
+    if (keyCode === LEFT_ARROW){ selected = (selected + n - 1) % n; }
+    else if (keyCode === RIGHT_ARROW){ selected = (selected + 1) % n; }
     else if (key === ' '){ startGame(); }
     else if (keyCode === ENTER){ startGame(); }
   } else if (gameState === PLAY){
@@ -190,18 +217,29 @@ function keyPressed(){
 
 function selectSong(i){
   selected = i;
-  // Pre-play preview (optional): start/stop to prime AudioContext
-  startGame();
+  // Lazy-load on selection if not already loaded
+  if (!songs[i]){
+    const name = songFiles[i];
+    if (!name){ console.warn('No filename for index', i); return; }
+    console.log('Loading on-demand:', name);
+    songs[i] = loadSound(`assets/${name}`,
+      () => { console.log('Loaded:', name); },
+      (e) => { console.error('Failed to load', name, e); }
+    );
+  }
 }
 
 function startGame(){
   // Stop any current track
   for (let s of songs) if (s && s.isPlaying()) s.stop();
-  currentSong = songs[selected];
-  if (currentSong){
-    currentSong.play();
-    currentSong.setLoop(false);
+  const s = songs[selected];
+  if (!s){
+    console.warn('Selected song not loaded yet. Try again after it finishes loading.');
+    return;
   }
+  currentSong = s;
+  currentSong.play();
+  currentSong.setLoop(false);
   resetGame();
   gameState = PLAY;
 }
@@ -450,6 +488,7 @@ class Spotlight{
     pop();
   }
 }
+
 
 
 
