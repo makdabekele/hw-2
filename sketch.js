@@ -1,5 +1,5 @@
-// BeatCatcher — p5.js (merged game logic + your PDE visuals & music)
-// ------------------------------------------------------------------
+// BeatCatcher — p5.js (logic + your PDE visuals, size, colors)
+// ------------------------------------------------------------
 // Folder structure (next to index.html):
 //   ./assets/
 //     BG_main.png
@@ -9,10 +9,6 @@
 //     Majid Jordan with Drake - Stars Align (Official Visualizer).mp3
 //     Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3
 //     Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3
-//
-// HTML needs p5 + p5.sound (sound AFTER p5):
-// <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
-// <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js"></script>
 
 /***** Assets *****/
 let bgImg, gameOverImg;
@@ -91,13 +87,14 @@ function preload(){
   );
 }
 
+/******************* Setup (YOUR ORIGINAL SIZE) *******************/
 function setup(){
-  createCanvas(windowWidth, windowHeight);
+  createCanvas(800, 600);     // <- your PDE had size(800, 600)
   textAlign(CENTER, CENTER);
   userStartAudio(); // ensure AudioContext is unlocked
 
   fft = new p5.FFT(0.85, 1024);
-  peak = new p5.PeakDetect(20, 120, 0.9, 20); // low band ~ kick
+  peak = new p5.PeakDetect(20, 120, 0.9, 20); // your “low band ~ kick”
 
   // Loop menu music (autoplay may wait for user gesture on some browsers)
   if (menuMusic) {
@@ -105,8 +102,6 @@ function setup(){
     try { if (!menuMusic.isPlaying()) menuMusic.play(); } catch (e) {}
   }
 }
-
-function windowResized(){ resizeCanvas(windowWidth, windowHeight); }
 
 function draw(){
   const now = millis();
@@ -123,10 +118,11 @@ function drawMenu(){
   rectMode(CORNER);
   if (bgImg) image(bgImg, 0, 0, width, height); else background(18);
 
+  // Title & hint (white like your PDE)
   fill(255);
   textSize(28);
   text('BEAT CATCHER', width/2, 90);
-  textSize(14); fill(200);
+  textSize(14); fill(220);
   text('Use ←/→ to select • ENTER/SPACE to start • Click a card to load', width/2, 130);
 
   const n = max(1, songFiles.length);
@@ -198,7 +194,7 @@ function selectSong(i){
 }
 
 function startGame(){
-  // Stop menu/game-over tracks
+  // Stop menu/game-over tracks (match PDE behavior)
   if (menuMusic && menuMusic.isPlaying()) menuMusic.pause();
   if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop();
 
@@ -218,17 +214,34 @@ function startGame(){
 
 function togglePause(){ if (!currentSong) return; currentSong.isPlaying() ? currentSong.pause() : currentSong.play(); }
 function restartGame(){ if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop(); startGame(); }
-function backToMenu(){ if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop(); if (menuMusic){ try{ menuMusic.stop(); menuMusic.loop(); }catch(e){} } stopAllSongs(); clearNotes(); gameState = MENU; }
-function goGameOver(){ if (currentSong) currentSong.pause(); if (gameOverMusic){ try{ gameOverMusic.stop(); gameOverMusic.play(); }catch(e){} } stopAllSongs(); gameState = GAME_OVER; }
+function backToMenu(){ 
+  if (gameOverMusic && gameOverMusic.isPlaying()) gameOverMusic.stop(); 
+  if (menuMusic){ try{ menuMusic.stop(); menuMusic.loop(); }catch(e){} } 
+  stopAllSongs(); 
+  clearNotes(); 
+  gameState = MENU; 
+}
+function goGameOver(){ 
+  if (currentSong) currentSong.pause(); 
+  if (gameOverMusic){ try{ gameOverMusic.stop(); gameOverMusic.play(); }catch(e){} } 
+  stopAllSongs(); 
+  gameState = GAME_OVER; 
+}
 
 function stopAllSongs(){ for (const s of songs) if (s && s.isPlaying()) s.stop(); currentSong = null; }
-function resetGame(){ score = 0; lives = maxLives; clearNotes(); spots = new Array(MAX_SPOTS).fill(null); lastSpawnMs = 0; pendingSpawns = 0; firstPendingAtMs = -1; bassPeak = 1; bassSmooth = 0; lastBass = 0; prevOnset = false; }
+function resetGame(){ 
+  score = 0; lives = maxLives; 
+  clearNotes(); 
+  spots = new Array(MAX_SPOTS).fill(null); 
+  lastSpawnMs = 0; pendingSpawns = 0; firstPendingAtMs = -1; 
+  bassPeak = 1; bassSmooth = 0; lastBass = 0; prevOnset = false; 
+}
 function clearNotes(){ for (let i = 0; i < MAX_NOTES; i++) notes[i] = null; }
 
 /******************* PLAY LOOP *******************/
 function runGame(dt){
   rectMode(CORNER);
-  if (bgImg) image(bgImg, 0, 0, width, height); else background(24);
+  if (bgImg) image(bgImg, 0, 0, width, height); else background(18);
 
   // FFT/Peak analysis attached to current song
   if (currentSong) fft.setInput(currentSong);
@@ -240,7 +253,7 @@ function runGame(dt){
   bassSmooth = lerp(bassSmooth, bass, 0.25);
   bassPeak = max(bassPeak * 0.995, bassSmooth + 1e-4);
 
-  // Spotlight trigger
+  // Spotlight trigger (your style, rising bass edge)
   const norm = (bassPeak <= 0) ? 0 : (bassSmooth / bassPeak);
   const rise = bassSmooth - lastBass;
   const strong = (bassSmooth > 0.45 && rise > 0.025) || (bassSmooth > 0.75 && rise > 0.015);
@@ -259,29 +272,26 @@ function runGame(dt){
   }
   prevOnset = onset;
 
-  // Release pending spawns with slight delay
+  // Release pending spawns with slight delay (cluster smoothing)
   if (pendingSpawns > 0 && nowMs - firstPendingAtMs >= SPAWN_DELAY_MS){
     trySpawnNote();
     pendingSpawns--;
     firstPendingAtMs = (pendingSpawns > 0) ? nowMs : -1;
   }
 
-  // Safety cooldown (optional immediate spawn disabled)
+  // Safety cooldown
   if (onset && (nowMs - lastSpawnMs) > spawnCooldownMs){
     lastSpawnMs = nowMs;
   }
 
-  // Stage effects
-  drawStageBackdrop(norm);
-
-  // Notes update/draw
+  // Notes update/draw (your colors: white circles, no stroke)
   for (let i = 0; i < MAX_NOTES; i++){
     const n = notes[i];
     if (!n) continue;
     n.update(dt);
     n.draw();
 
-    const hit = circleRectCollide(n.x, n.y, n.r, mouseX - paddleW/2, height - 42, paddleW, paddleH);
+    const hit = circleRectCollide(n.x, n.y, n.r, paddleX(), paddleY(), paddleW, paddleH);
     if (hit){ score += 10; notes[i] = null; continue; }
 
     if (n.offScreen()){ notes[i] = null; lives--; if (lives <= 0) goGameOver(); }
@@ -296,31 +306,16 @@ function runGame(dt){
     if (s.dead()) spots[i] = null;
   }
 
-  // Paddle + HUD
+  // Paddle (your gold color) + HUD
   drawPaddle();
   drawHUD();
 }
 
-function drawStageBackdrop(norm){
-  push();
-  noStroke();
-  // Subtle stage layers
-  for (let i = 0; i < 10; i++){
-    const t = i / 9;
-    fill(10 + 30*t, 10 + 30*t, 16 + 40*t);
-    rect(0, height*(0.25 + t*0.075), width, height*0.08);
-  }
-  // Bass flash overlay
-  const a = map(norm, 0, 1, 0, 80);
-  fill(20, 250, 200, a);
-  rect(0, 0, width, height);
-  pop();
-}
-
+/******************* HUD & Paddle (YOUR COLORS) *******************/
 function drawHUD(){
   push();
   textAlign(LEFT, TOP);
-  fill(255);
+  fill(255);        // white text like PDE
   textSize(16);
   text(`Score: ${score}`, 18, 16);
   let hearts = '';
@@ -330,12 +325,18 @@ function drawHUD(){
   pop();
 }
 
+function paddleX(){
+  return constrain(mouseX - paddleW/2, 20, width - 20 - paddleW);
+}
+function paddleY(){
+  return height - 80; // matches your PDE “paddleY = height - 80;”
+}
 function drawPaddle(){
   push();
-  const x = constrain(mouseX - paddleW/2, 20, width - 20 - paddleW);
-  const y = height - 42;
-  fill(240);
-  rect(x, y, paddleW, paddleH, 8);
+  rectMode(CORNER);
+  noStroke();
+  fill(255, 230, 120);                // <- your paddle color
+  rect(paddleX(), paddleY(), paddleW, paddleH, 6);
   pop();
 }
 
@@ -343,13 +344,13 @@ function drawGameOver(){
   rectMode(CORNER);
   if (gameOverImg) image(gameOverImg, 0, 0, width, height); else background(0);
   fill(255);
-  textSize(28);
-  text('Game Over', width/2, height*0.35);
-  textSize(16);
-  text(`Final Score: ${score}`, width/2, height*0.35 + 30);
-  fill(200);
+  textSize(32);
+  text('GAME OVER', width/2, height/2 - 40);
+  textSize(18);
+  text(`Score: ${score}`, width/2, height/2 + 10);
+  fill(220);
   textSize(14);
-  text('Press R to restart • ENTER for Menu', width/2, height*0.35 + 58);
+  text('Press R to restart • ENTER for Menu', width/2, height/2 + 40);
 }
 
 /******************* Spawning & Geometry *******************/
@@ -370,11 +371,17 @@ function circleRectCollide(cx, cy, r, rx, ry, rw, rh){
   return (dx*dx + dy*dy) <= (r*r);
 }
 
-/******************* Classes *******************/
+/******************* Classes (match your PDE intent) *******************/
 class Note{
   constructor(x, y, vy, r){ this.x = x; this.y = y; this.vy = vy; this.r = r; }
   update(dt){ this.y += this.vy * dt; }
-  draw(){ push(); noFill(); stroke(255); ellipse(this.x, this.y, this.r*2, this.r*2); pop(); }
+  draw(){ 
+    push(); 
+    noStroke(); 
+    fill(255);                    // white notes like your PDE draw pass
+    ellipse(this.x, this.y, this.r*2, this.r*2); 
+    pop(); 
+  }
   offScreen(){ return this.y - this.r > height; }
 }
 
@@ -386,6 +393,7 @@ class Spotlight{
     this.h = random(260, 420);
     this.a = 180;
     this.decay = random(4, 7);
+    // your random light palette (bright pastels)
     this.r = random(140, 255);
     this.g = random(140, 255);
     this.b = random(140, 255);
@@ -411,6 +419,7 @@ class Spotlight{
     pop();
   }
 }
+
 
 
 
