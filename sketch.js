@@ -15,12 +15,11 @@
 /***** Assets *****/
 // Start with ONE known-good file while debugging
 let songFiles = [
-  "test.mp3",
-  // "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
-  // "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
-  // "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
+  "Majid Jordan with Drake - Stars Align (Official Visualizer).mp3",
+  "Snoop Dogg - California Roll (Audio) ft. Stevie Wonder.mp3",
+  "Travis Scott, Sheck Wes, Don Toliver - 2000 EXCURSION (Official Audio).mp3"
 ];
-let songTitles = ["Test Track"]; // keep in sync with songFiles while debugging
+let songTitles = ["Stars Align", "California Roll", "2000 Excursion"]; // keep in sync with songFiles while debugging
 
 /***** Audio + Analysis *****/
 let songs = [];            // p5.SoundFile[]
