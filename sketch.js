@@ -45,7 +45,7 @@ let spots = new Array(MAX_SPOTS).fill(null);
 /***** Rhythm / Spawning *****/
 let prevOnset = false;         // rising-edge detection
 let lastSpawnMs = 0;           // cooldown for note spawns
-let spawnCooldownMs = 250;
+let spawnCooldownMs = 150;
 
 let pendingSpawns = 0;         // staggered spawns (cluster smoothing)
 let firstPendingAtMs = -1;
@@ -127,7 +127,7 @@ function drawMenu(){
   textSize(28);
   text('BEAT CATCHER', width/2, 90);
   textSize(14); fill(220);
-  text('Use ←/→ to select • ENTER/SPACE to start • Mouse controls game pad', width/2, 130);
+  text('Use ←/→ to select • ENTER/SPACE to start • When song loads, click with mouse', width/2, 130);
 
   const n = max(1, songFiles.length);
   const songCardW = 220;
