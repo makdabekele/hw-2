@@ -45,11 +45,11 @@ let spots = new Array(MAX_SPOTS).fill(null);
 /***** Rhythm / Spawning *****/
 let prevOnset = false;         // rising-edge detection
 let lastSpawnMs = 0;           // cooldown for note spawns
-let spawnCooldownMs = 350;
+let spawnCooldownMs = 250;
 
 let pendingSpawns = 0;         // staggered spawns (cluster smoothing)
 let firstPendingAtMs = -1;
-const SPAWN_DELAY_MS = 200;
+const SPAWN_DELAY_MS = 160;
 
 let lastSpotlightMs = 0;       // spotlight throttle
 let spotlightCooldownMs = 120;
