@@ -300,7 +300,7 @@ function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(18);
-  text("Score: " + score", width/2, height/2 + 10);
+  text("Score: " + score, width/2, height/2 + 10);
   fill(220);
   textSize(14);
   text("Press R to restart • ENTER for Menu", width/2, height/2 + 40);
