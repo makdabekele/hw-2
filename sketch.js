@@ -49,7 +49,7 @@ let spawnCooldownMs = 250;
 
 let pendingSpawns = 0;         // staggered spawns (cluster smoothing)
 let firstPendingAtMs = -1;
-const SPAWN_DELAY_MS = 160;
+const SPAWN_DELAY_MS = 170;
 
 let lastSpotlightMs = 0;       // spotlight throttle
 let spotlightCooldownMs = 120;
@@ -127,7 +127,7 @@ function drawMenu(){
   textSize(28);
   text('BEAT CATCHER', width/2, 90);
   textSize(14); fill(220);
-  text('Use ←/→ to select • ENTER/SPACE to start • Click a card to load', width/2, 130);
+  text('Use ←/→ to select • ENTER/SPACE to start • Mouse controls game pad', width/2, 130);
 
   const n = max(1, songFiles.length);
   const songCardW = 220;
