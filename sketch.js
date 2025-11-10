@@ -1,14 +1,11 @@
-// ===== Beat Catcher — p5.js (minimal port w/ isKick & isSnare emulation) =====
-// Requires: p5.js + p5.sound
-// Note: Click or press any key once on the menu to enable audio (browser policy).
+// ===== Beat Catcher — p5.js (minimal port from MAKGAME.pde) =====
+// Needs: p5.js + p5.sound. Run from a local server (not file://).
 
 // ---------- AUDIO ----------
-let minim_like = {}; // placeholder, not used (parity w/ original names)
-let song = null;     // current gameplay song
-let fft = null;      // p5.FFT
-let menuMusic, gameOverMusic;
-let gameSongs = [];
-let haveInteracted = false; // user gesture required for audio
+let song = null;              // current gameplay song
+let menuMusic, gameOverMusic; // menu/gameover tracks
+let fft = null;               // p5.FFT
+let haveInteracted = false;   // unlock audio after first gesture
 
 // ---------- SONGS ----------
 const songFiles = [
@@ -23,12 +20,9 @@ const songTitles = [
 ];
 let selected = 0;
 
-// ---------- IMAGES / FONT ----------
-let bgImg = null, gameOverImg = null;
-let paddleX = 0;
-let paddleY = 0;
-let paddleW = 140;
-let paddleH = 16;
+// ---------- IMAGES ----------
+let bgImg = null;
+let gameOverImg = null;
 
 // ---------- GAME STATE ----------
 const MENU = 0, PLAY = 1, GAMEOVER = 2;
@@ -42,12 +36,12 @@ let notes = new Array(MAX_NOTES).fill(null);
 const MAX_SPOTS = 16;
 let spots = new Array(MAX_SPOTS).fill(null);
 
-// ---------- BASS FLASH SMOOTHING ----------
+// ---------- BASS FLASH (visual only) ----------
 let bassPeak = 1;
 let bassSmooth = 0;
 let lastBass = 0;
 
-// ---------- PENDING SPAWNS (kick rising-edge) ----------
+// ---------- PENDING SPAWNS ----------
 let pendingSpawns = 0;
 let firstPendingAtMs = -1;
 const SPAWN_DELAY_MS = 200;
@@ -55,8 +49,15 @@ const SPAWN_DELAY_MS = 200;
 // ---------- COOLDOWNS ----------
 let lastSpotlightMs = 0;
 let spotlightCooldownMs = 120;
+
 let lastSpawnMs = 0;
 let spawnCooldownMs = 350;
+
+// ---------- UI / PADDLE ----------
+let paddleX = 0;
+let paddleY = 0;
+let paddleW = 140;
+let paddleH = 16;
 
 // ---------- SCORE/LIVES ----------
 let score = 0;
@@ -66,73 +67,62 @@ let maxLives = 3;
 // ---------- TIMING ----------
 let prevMs = 0;
 
-// ---------- KICK/SNARE EMULATION ----------
-let prevKick = false;
-let prevOnset = false; // kept to mirror your original
+// ---------- KICK/SNARE EMULATION (Minim-like) ----------
+let prevOnset = false;        // mirrors original “prevOnset”
 let lastKickMs = 0, lastSnareMs = 0;
-const KICK_COOLDOWN_MS  = 110; // similar to Minim feel
+const KICK_COOLDOWN_MS  = 110;
 const SNARE_COOLDOWN_MS = 120;
-// band choices (tweak if needed)
-const KICK_LOW  = [20, 150];
+
+// bands (Hz)
+const KICK_BAND = [20, 150];
 const MID_BAND  = [150, 400];
 const SNARE_BAND = [180, 300];
-// thresholds
-let kickRatioThreshold  = 1.35;  // low/mid ratio
-let kickEnergyFloor     = 50;    // ensure non-trivial low energy
-let snareEnergyThreshold = 80;   // absolute mid-high energy
 
-// =======================================================
-// PRELOAD
-// =======================================================
+// thresholds
+let lowEnv = 0, lastLowEnv = 0;  // envelope follower for lows
+const LOW_ATTACK = 0.45;         // faster rise
+const LOW_RELEASE = 0.08;        // slower fall
+const EDGE_DELTA = 14;           // env jump to count as onset
+const LOW_FLOOR   = 60;          // ignore tiny lows
+const RATIO_MIN   = 1.35;        // low vs mid dominance
+const SNARE_THRESH = 95;         // absolute energy for snare
+
+// Preload (assets)
 function preload() {
   soundFormats('mp3', 'wav', 'ogg');
 
-  // images (safe-load; if missing, keep null)
   bgImg = loadImage("BG_main.png", () => {}, () => { bgImg = null; });
   gameOverImg = loadImage("game_over.png", () => {}, () => { gameOverImg = null; });
 
-  // music
   menuMusic     = loadSound("Ariana Grande - no tears left to cry (Official Instrumental)-[AudioTrimmer.com].mp3");
   gameOverMusic = loadSound("Hunter x Hunter 2011 OST 3 - 1 - Kingdom of Predators-[AudioTrimmer.com].mp3");
 
-  // gameplay songs
+  // Preload gameplay songs to avoid async start hiccups
+  // (We’ll set fft.setInput(song) after we .play())
   for (let i = 0; i < songFiles.length; i++) {
-    try {
-      gameSongs[i] = loadSound(songFiles[i]);
-    } catch (e) {
-      gameSongs[i] = null;
-    }
+    try { songFiles[i] = songFiles[i]; } catch(e) {}
   }
 }
 
-// =======================================================
-// SETUP / DRAW
-// =======================================================
 function setup() {
   createCanvas(800, 600);
   frameRate(60);
-
   fft = new p5.FFT(0.8, 1024);
-
   paddleY = height - 80;
-  textFont('Helvetica');
-
-  // we won’t start audio until the first user gesture
+  textFont("Helvetica");
 }
 
 function draw() {
   const now = millis();
-  const dt = (prevMs === 0) ? (1.0 / 60.0) : (now - prevMs) / 1000.0;
+  const dt = prevMs === 0 ? (1/60) : (now - prevMs) / 1000;
   prevMs = now;
 
-  if (gameState === MENU)       drawMenu();
-  else if (gameState === PLAY)  updateAndDrawGame(dt);
+  if (gameState === MENU)      drawMenu();
+  else if (gameState === PLAY) updateAndDrawGame(dt);
   else if (gameState === GAMEOVER) drawGameOver();
 }
 
-// =======================================================
-// MENU
-// =======================================================
+// ---------------- MENU ----------------
 function drawMenu() {
   rectMode(CORNER);
   if (bgImg) image(bgImg, 0, 0, width, height);
@@ -143,92 +133,68 @@ function drawMenu() {
   textSize(28);
   text("BEAT CATCHER", width/2, 90);
 
-  textSize(14);
   fill(200);
+  textSize(14);
   if (!haveInteracted) {
-    text("Press any key/click once to enable audio • Arrows to choose song • ENTER to start", width/2, 130);
+    text("Press any key/click once to enable audio • Arrows change song • ENTER starts", width/2, 130);
   } else {
-    text("Use arrow keys to select song • ENTER to start", width/2, 130);
+    text("Use ← → to select a song • ENTER to start", width/2, 130);
   }
 
-  const songCardW = 220;
-  const songCardH = 120;
-  const spacing = 30;
-  const totalW = 3 * songCardW + 2 * spacing;
+  const cardW = 220, cardH = 120, spacing = 30;
+  const totalW = 3 * cardW + 2 * spacing;
   const startX = (width - totalW) / 2;
-  const y = height/2 - songCardH/2;
+  const y = height/2 - cardH/2;
 
   for (let i = 0; i < 3; i++) {
-    const x = startX + i * (songCardW + spacing);
+    const x = startX + i * (cardW + spacing);
     if (i === selected) {
-      fill(255, 230, 120);
-      stroke(40);
-      strokeWeight(2);
-    } else {
-      noStroke();
-      fill(40);
-    }
-    rect(x, y, songCardW, songCardH, 14);
+      fill(255, 230, 120); stroke(40); strokeWeight(2);
+    } else { noStroke(); fill(40); }
+    rect(x, y, cardW, cardH, 14);
     fill(i === selected ? 30 : 220);
     textSize(16);
-    text(songTitles[i], x + songCardW/2, y + songCardH/2);
+    text(songTitles[i], x + cardW/2, y + cardH/2);
   }
 }
 
-// =======================================================
-// GAME LOOP (PLAY)
-// =======================================================
+// --------------- GAME -----------------
 function updateAndDrawGame(dt) {
   rectMode(CORNER);
   if (bgImg) image(bgImg, 0, 0, width, height);
   else background(24);
 
-  // Paddle follows mouse, clamped
-  paddleX = constrain(mouseX, paddleW / 2, width - paddleW / 2);
+  // Paddle
+  paddleX = constrain(mouseX, paddleW/2, width - paddleW/2);
 
-  // --- AUDIO ANALYSIS & DETECTION ---
   if (song && song.isPlaying()) {
     fft.analyze();
 
-    // Bass flash (visual smoothing only)
-    const sumBass = fft.getEnergy(KICK_LOW[0], KICK_LOW[1]); // 0..255
-    bassPeak = Math.max(1, Math.max(bassPeak * 0.96, sumBass));
-    const norm = sumBass / bassPeak;
-    bassSmooth = lerp(bassSmooth, norm, 0.2);
-
-    const rise = bassSmooth - lastBass;
-    const strong = (bassSmooth > 0.45 && rise > 0.025) || (bassSmooth > 0.75 && rise > 0.015);
-
-    const nowMs = millis();
-    // visual-based spotlight pulses (like original)
-    if (strong && (nowMs - lastSpotlightMs) > spotlightCooldownMs) {
-      addSpotlight(random(60, width - 60));
-      if (bassSmooth > 0.90 && random() < 0.4) addSpotlight(random(60, width - 60));
-      lastSpotlightMs = nowMs;
-    }
+    // --- Bass flash (visual only; no gating) ---
+    const lowNow = fft.getEnergy(KICK_BAND[0], KICK_BAND[1]);
+    bassPeak = Math.max(1, Math.max(bassPeak * 0.96, lowNow));
+    bassSmooth = lerp(bassSmooth, lowNow / bassPeak, 0.2);
     lastBass = bassSmooth;
 
-    // ---- Minim-like BeatDetect: isKick / isSnare ----
+    // --- Onset detection (kick/snare) ---
+    const nowMs = millis();
     const onsetKick  = isKick();
-    const onsetSnare = isSnare();
+    const onsetSnare = isSnare(); // available if needed
 
-    // Use kick for your spawn pipeline (same as beat.isKick())
+    // Kick drives BOTH spotlights and spawns (so they’re simultaneous)
+    if (onsetKick && (nowMs - lastSpotlightMs) > spotlightCooldownMs) {
+      addSpotlight(random(60, width - 60));
+      if (random() < 0.35) addSpotlight(random(60, width - 60));
+      lastSpotlightMs = nowMs;
+    }
+
     if (onsetKick && !prevOnset) {
       pendingSpawns++;
       if (firstPendingAtMs === -1) firstPendingAtMs = nowMs;
     }
     prevOnset = onsetKick;
 
-    // IMPORTANT: To guarantee simultaneity, also allow kick to trigger spotlights immediately
-    if (onsetKick && (nowMs - lastSpotlightMs) > spotlightCooldownMs) {
-      addSpotlight(random(60, width - 60));
-      lastSpotlightMs = nowMs;
-    }
-
-    // (Optional) You can do something distinct on snare:
-    // e.g., thinner spotlight or color shift, left as-is for minimalism.
-
-    // Delayed spawn to align visuals, with cooldown & cap (unchanged)
+    // Spawn queue with delay + cooldown + cap
     if (pendingSpawns > 0 && firstPendingAtMs !== -1 && (nowMs - firstPendingAtMs) >= SPAWN_DELAY_MS) {
       if (countActiveNotes() < 22 && (nowMs - lastSpawnMs) > spawnCooldownMs) {
         spawn();
@@ -256,7 +222,7 @@ function updateAndDrawGame(dt) {
     if (n) {
       n.update(dt);
       n.drawNote();
-      if (circleRectOverlap(n.x, n.y, n.r, paddleX - paddleW / 2, paddleY - paddleH / 2, paddleW, paddleH)) {
+      if (circleRectOverlap(n.x, n.y, n.r, paddleX - paddleW/2, paddleY - paddleH/2, paddleW, paddleH)) {
         score++;
         notes[i] = null;
         continue;
@@ -264,10 +230,7 @@ function updateAndDrawGame(dt) {
       if (notes[i] && n.offScreen()) {
         notes[i] = null;
         lives--;
-        if (lives <= 0) {
-          goGameOver();
-          return;
-        }
+        if (lives <= 0) { goGameOver(); return; }
       }
     }
   }
@@ -276,19 +239,16 @@ function updateAndDrawGame(dt) {
   textAlign(LEFT, TOP);
   fill(255);
   textSize(16);
-  text("Score: " + score, 18, 16);
+  text(`Score: ${score}`, 18, 16);
 
   let hearts = "";
   for (let i = 0; i < lives; i++) hearts += "<3 ";
   fill(255, 120, 120);
-  text("Lives: " + hearts, 18, 40);
+  text(`Lives: ${hearts}`, 18, 40);
 }
 
-// =======================================================
-// GAME OVER
-// =======================================================
+// ------------- GAME OVER --------------
 function drawGameOver() {
-  rectMode(CORNER);
   if (gameOverImg) image(gameOverImg, 0, 0, width, height);
   else {
     background(10);
@@ -300,45 +260,46 @@ function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(18);
-  text("Score: " + score, width/2, height/2 + 10);
+  text(`Score: ${score}`, width/2, height/2 + 10);
   fill(220);
   textSize(14);
   text("Press R to restart • ENTER for Menu", width/2, height/2 + 40);
 }
 
-// =======================================================
-// DETECTION: isKick / isSnare (Minim-like recreation)
-// =======================================================
+// ---------- Minim-like isKick/isSnare ----------
 function isKick() {
-  // kick ≈ strong low vs mid (ratio) + cooldown
   const now = millis();
-  const low = fft.getEnergy(KICK_LOW[0], KICK_LOW[1]);
+  const low = fft.getEnergy(KICK_BAND[0], KICK_BAND[1]);  // 0..255
   const mid = fft.getEnergy(MID_BAND[0], MID_BAND[1]);
-  const ratio = low / (mid + 1);
 
-  const kick = (low > kickEnergyFloor && ratio > kickRatioThreshold && (now - lastKickMs) > KICK_COOLDOWN_MS);
+  // Envelope follower for lows (fast attack / slow release)
+  const target = low;
+  const diff = target - lowEnv;
+  lowEnv += (diff > 0 ? LOW_ATTACK : LOW_RELEASE) * diff;
+
+  const rising = (lowEnv - lastLowEnv) > EDGE_DELTA;
+  const dominates = (low > LOW_FLOOR) && (low / (mid + 1) > RATIO_MIN);
+  const okCooldown = (now - lastKickMs) > KICK_COOLDOWN_MS;
+
+  const kick = rising && dominates && okCooldown;
+  lastLowEnv = lowEnv;
   if (kick) lastKickMs = now;
   return kick;
 }
 
 function isSnare() {
-  // snare ≈ mid-high burst + cooldown
   const now = millis();
   const sn = fft.getEnergy(SNARE_BAND[0], SNARE_BAND[1]);
-  const trig = (sn > snareEnergyThreshold && (now - lastSnareMs) > SNARE_COOLDOWN_MS);
+  const okCooldown = (now - lastSnareMs) > SNARE_COOLDOWN_MS;
+  const trig = (sn > SNARE_THRESH) && okCooldown;
   if (trig) lastSnareMs = now;
   return trig;
 }
 
-// =======================================================
-// SPOTLIGHTS
-// =======================================================
+// -------------- SPOTLIGHTS --------------
 function addSpotlight(x) {
   for (let i = 0; i < MAX_SPOTS; i++) {
-    if (spots[i] === null) {
-      spots[i] = new Spotlight(x);
-      return;
-    }
+    if (spots[i] === null) { spots[i] = new Spotlight(x); return; }
   }
 }
 
@@ -356,37 +317,34 @@ function updateAndDrawSpotlights() {
 function clearSpotlights() {
   for (let i = 0; i < MAX_SPOTS; i++) spots[i] = null;
   lastSpotlightMs = 0;
-  bassPeak = 1;
-  bassSmooth = 0;
-  lastBass = 0;
+  bassPeak = 1; bassSmooth = 0; lastBass = 0;
 }
 
-// =======================================================
-// STATE CONTROL
-// =======================================================
+// -------------- STATE CONTROL --------------
 function startGame() {
   stopAllMusic();
+  // reset pipelines & throttles
   pendingSpawns = 0;
   firstPendingAtMs = -1;
+  prevOnset = false;
+  lastSpawnMs = 0;
+  lastSpotlightMs = 0;
+  lastKickMs = 0;
+  lastSnareMs = 0;
+  lowEnv = 0; lastLowEnv = 0;
+
   clearNotes();
   clearSpotlights();
   score = 0;
   lives = maxLives;
-  lastSpawnMs = 0;
-  prevOnset = false;
-  lastBass = 0;
-  bassPeak = 1;
-  bassSmooth = 0;
+  bassPeak = 1; bassSmooth = 0; lastBass = 0;
 
-  // pick preloaded song
-  song = gameSongs[selected] || null;
-  if (song) {
-    song.stop();
+  // Load and play selected song
+  stopSong();
+  song = loadSound(songFiles[selected], () => {
     song.play();
     fft.setInput(song);
-  } else {
-    fft.setInput(null);
-  }
+  });
   gameState = PLAY;
 }
 
@@ -401,7 +359,7 @@ function backToMenu() {
   clearSpotlights();
   fft.setInput(null);
   gameState = MENU;
-  if (haveInteracted && menuMusic) menuMusic.loop();
+  if (haveInteracted && menuMusic && !menuMusic.isPlaying()) menuMusic.loop();
 }
 
 function goGameOver() {
@@ -410,16 +368,9 @@ function goGameOver() {
   if (gameOverMusic) gameOverMusic.play();
 }
 
-// =======================================================
-// MUSIC HELPERS
-// =======================================================
+// -------------- MUSIC HELPERS --------------
 function stopSong() {
-  if (song) {
-    song.stop();
-    song.disconnect();
-    song = null;
-    fft.setInput(null);
-  }
+  if (song) { song.stop(); song.disconnect(); song = null; fft.setInput(null); }
 }
 
 function stopAllMusic() {
@@ -428,49 +379,31 @@ function stopAllMusic() {
   if (gameOverMusic) gameOverMusic.stop();
 }
 
-// =======================================================
-// INPUT
-// =======================================================
+// -------------- INPUT --------------
 function keyPressed() {
-  // first gesture: enable audio + loop menu music if in MENU
   if (!haveInteracted) {
-    userStartAudio();
-    haveInteracted = true;
-    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) {
-      menuMusic.loop();
-    }
+    userStartAudio(); haveInteracted = true;
+    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) menuMusic.loop();
   }
 
   if (gameState === MENU) {
-    if (keyCode === LEFT_ARROW) {
-      selected = (selected + songFiles.length - 1) % songFiles.length;
-    } else if (keyCode === RIGHT_ARROW) {
-      selected = (selected + 1) % songFiles.length;
-    } else if (keyCode === ENTER || keyCode === RETURN) {
-      startGame();
-    }
+    if (keyCode === LEFT_ARROW) selected = (selected + songFiles.length - 1) % songFiles.length;
+    else if (keyCode === RIGHT_ARROW) selected = (selected + 1) % songFiles.length;
+    else if (keyCode === ENTER || keyCode === RETURN) startGame();
   } else if (gameState === GAMEOVER) {
-    if (key === 'r' || key === 'R') {
-      restartGame();
-    } else if (keyCode === ENTER || keyCode === RETURN) {
-      backToMenu();
-    }
+    if (key === 'r' || key === 'R') restartGame();
+    else if (keyCode === ENTER || keyCode === RETURN) backToMenu();
   }
 }
 
 function mousePressed() {
   if (!haveInteracted) {
-    userStartAudio();
-    haveInteracted = true;
-    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) {
-      menuMusic.loop();
-    }
+    userStartAudio(); haveInteracted = true;
+    if (gameState === MENU && menuMusic && !menuMusic.isPlaying()) menuMusic.loop();
   }
 }
 
-// =======================================================
-// SPAWNING
-// =======================================================
+// -------------- SPAWNING --------------
 function spawn() {
   if (countActiveNotes() >= 22) return;
   for (let i = 0; i < MAX_NOTES; i++) {
@@ -482,38 +415,27 @@ function spawn() {
 }
 
 function countActiveNotes() {
-  let c = 0;
-  for (let i = 0; i < MAX_NOTES; i++) if (notes[i] !== null) c++;
+  let c = 0; for (let i = 0; i < MAX_NOTES; i++) if (notes[i] !== null) c++;
   return c;
 }
 
-function clearNotes() {
-  for (let i = 0; i < MAX_NOTES; i++) notes[i] = null;
-}
+function clearNotes() { for (let i = 0; i < MAX_NOTES; i++) notes[i] = null; }
 
-// =======================================================
-// GEOMETRY
-// =======================================================
+// -------------- GEOMETRY --------------
 function circleRectOverlap(cx, cy, cr, rx, ry, rw, rh) {
   const nearestX = constrain(cx, rx, rx + rw);
   const nearestY = constrain(cy, ry, ry + rh);
-  const dx = cx - nearestX;
-  const dy = cy - nearestY;
-  return (dx * dx + dy * dy) <= cr * cr;
+  const dx = cx - nearestX, dy = cy - nearestY;
+  return (dx*dx + dy*dy) <= cr*cr;
 }
 
-// =======================================================
-// CLASSES
-// =======================================================
+// -------------- CLASSES --------------
 class Note {
   constructor(startX, startY, speed, radius) {
-    this.x = startX;
-    this.y = startY;
-    this.vy = speed;
-    this.r = radius;
+    this.x = startX; this.y = startY; this.vy = speed; this.r = radius;
   }
   update(dt) { this.y += this.vy * dt; }
-  drawNote() { ellipse(this.x, this.y, this.r * 2, this.r * 2); }
+  drawNote() { ellipse(this.x, this.y, this.r*2, this.r*2); }
   offScreen() { return this.y - this.r > height; }
 }
 
@@ -525,8 +447,7 @@ class Spotlight {
     this.h = random(260, 420);
     this.a = 180;
     this.decay = random(4, 7);
-
-    // color range similar to your neon
+    // neon-ish color band
     this.r = random(100, 255);
     this.g = random(0, 150);
     this.b = random(150, 255);
@@ -534,24 +455,20 @@ class Spotlight {
   update() { this.a -= this.decay; }
   dead() { return this.a <= 0; }
   draw() {
-    push();
-    translate(this.x, height);
-    rotate(this.angle);
-    blendMode(ADD);
-    noStroke();
+    push(); translate(this.x, height); rotate(this.angle);
+    blendMode(ADD); noStroke();
     for (let i = 0; i < 4; i++) {
-      const t = 1 - i * 0.22;
-      const al = int(this.a * (0.55 - i * 0.12));
+      const t = 1 - i*0.22;
+      const al = int(this.a * (0.55 - i*0.12));
       if (al <= 0) continue;
       fill(this.r, this.g, this.b, al);
-      const ww = this.w * t;
-      const hh = -this.h * t;
+      const ww = this.w * t, hh = -this.h * t;
       triangle(0, 0, -ww, hh, ww, hh);
     }
-    blendMode(BLEND);
-    pop();
+    blendMode(BLEND); pop();
   }
 }
+
 
 
 
